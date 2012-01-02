@@ -1,0 +1,4 @@
+dnsproxyd
+DNS Proxy Server
+
+DNS Proxy Server is an ultra fast DNS Proxy written in Java. It is a service which forwards DNS packets between a client and a server. It supports whitelisting and blacklisting DNS host names to block or allow domain names based on rule sets. The service can also cache DNS entries for fast responses on slow connections. This implementation is for Red Hat Linux but it can be easily adopted to any JRE supported environment.
