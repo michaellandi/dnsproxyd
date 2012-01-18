@@ -1,7 +1,7 @@
 /*
  * dnsproxyd
  * Version 1.0
- * Copyright © 2008 Michael Landi
+ * Copyright ï¿½ 2008 Michael Landi
  *
  * This file is part of dnsproxyd.
  *
@@ -28,7 +28,7 @@ public class DNSProxy extends Thread {
 	 * Constants.
 	 */
 	private static final double		VERSION	=	0.93;
-	private static final String		CONFDIR	=	"/shared/ccinformer/dnsproxy";
+	private static final String		CONFDIR	=	"/etc/dnsproxyd";
 	private static final boolean	DEBUG	= 	false;
 	
 	private enum					FILTERMODE {None, Blacklist, Whitelist};
