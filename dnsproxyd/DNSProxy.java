@@ -288,11 +288,11 @@ public class DNSProxy extends Thread {
 		_bBlockedIP = new byte[] {(byte)192, (byte)168, 0, 2};
 		_bUnknownIP = new byte[] {(byte)192, (byte)168, 0, 2};
 		_intPort = 53;
-		_strWhitePath = "/shared/ccinformer/dnsproxy/whitelist.dat";
-		_strBlackPath = "/shared/ccinformer/dnsproxy/blacklist.dat";
+		_strWhitePath = "/etc/dnsproxyd/whitelist.dat";
+		_strBlackPath = "/etc/dnsproxyd/blacklist.dat";
 		_strCachePath = "/tmp/dnscache.tmp";
 		_intCacheTime = 604800000;
-		_strLogPath = "/shared/ccinformer/logs";
+		_strLogPath = "/var/log/dnsproxyd";
 		_varCache = true;
 
 		try {
