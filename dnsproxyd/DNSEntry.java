@@ -1,7 +1,7 @@
 /*
  * dnsproxyd
  * Version 1.0
- * Copyright © 2008 Michael Landi
+ * Copyright ï¿½ 2008 Michael Landi
  *
  * This file is part of dnsproxyd.
  *
@@ -32,7 +32,7 @@ public class DNSEntry implements Serializable {
 	public DNSEntry(String domain, byte[] ipAddress) {
 		_strDomain = domain.trim().toLowerCase();
 		_bAddress = ipAddress;
-		_lngUpdate = new Date().getTime();
+		_lngUpdate = System.currentTimeMillis();
 	}
 
 	public String getDomain() {

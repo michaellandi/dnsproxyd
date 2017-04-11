@@ -21,15 +21,17 @@
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class DNSProxy extends Thread {
 	/*
 	 * Constants.
 	 */
-	private static final double		VERSION	=	0.93;
-	private static final String		CONFDIR	=	"/etc/dnsproxyd";
-	private static final boolean	DEBUG	= 	false;
+	private static final double		VERSION	=	0.94;
+	private static String			CONFDIR	=	"/etc/dnsproxyd";
+	private static boolean			DISABLED= 	false;
+	private static boolean			DEBUG	= 	true;
 	
 	private enum					FILTERMODE {None, Blacklist, Whitelist};
 
@@ -41,21 +43,23 @@ public class DNSProxy extends Thread {
 	private byte[]				_bUnknownIP;
 	private byte[]				_bBlockedIP;
 	private String				_strLogPath;
-	private String				_strCachePath;
 	private String				_strWhitePath;
 	private String				_strBlackPath;
 	private boolean				_varCache;
 	private FILTERMODE			_fmFilter;
+	private String       		nameserver;
 
 	/*
 	 * Instance variables.
 	 */
 	private boolean 			_varListen;
-	private String[]			_strWhitelist;
-	private String[]			_strBlacklist;
+	private Set<String>			_strWhitelist;
+	private Set<String>			_strBlacklist;
 	private EventListener		_elSystem;
 	private DNSCache			_dnsCache;
 	private static DNSLog		_dnsLog;
+
+	static final SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd,HH:mm:ss");
 
 	/*
 	 * Constructor.
@@ -63,34 +67,33 @@ public class DNSProxy extends Thread {
 	public DNSProxy(String config) {
 		printBanner();
 		loadSettings(config);
-		loadWhitelist(_strWhitePath);
-		loadBlacklist(_strBlackPath);
-
-		if (_varCache) {
-			_dnsCache = new DNSCache(_strCachePath);
-			printDebug(_dnsCache.prune(_intCacheTime) + " cached records pruned.\n");
+		if(! DISABLED) {
+			_strBlacklist = loadBlackOrWhitelist(_strBlackPath, "blacklist");
+			_strWhitelist = loadBlackOrWhitelist(_strWhitePath, "whitelist");
 		}
 
-		_dnsLog = new DNSLog(_strLogPath);
+		if (_varCache) {
+			_dnsCache = new DNSCache();
+		}
+
+		//_dnsLog = new DNSLog(_strLogPath);
 	}
 
 //------------------------------------------------------------------------------
 
 	public void close() {
-		if (_varCache)
-			_dnsCache.writeCache();
 
 		_varListen = false;
 		_elSystem.close();
 		
 		try {
-			Thread.currentThread().sleep(500);
+			Thread.sleep(500);
 		}
 		catch (Exception e) {
 			printDebug(e);
 		}
 
-		_dnsLog.closeHandle();
+		//_dnsLog.closeHandle();
 		System.exit(0);
 	}
 
@@ -133,9 +136,9 @@ public class DNSProxy extends Thread {
 	public void listen() throws Exception {
 		byte[] bRequest;
 		DatagramPacket dPacket;
+		printDebug("Listening for requests on port " + _intPort + ":");
 		DatagramSocket dSocket = new DatagramSocket(_intPort);
 		
-		printDebug("Listening for requests on port " + _intPort + ":");
 
 		while (_varListen) {
 			bRequest = new byte[96];
@@ -143,7 +146,7 @@ public class DNSProxy extends Thread {
 			dSocket.receive(dPacket);
 
 			new ClientThread(dSocket, dPacket.getAddress(), 
-				dPacket.getPort(), bRequest).start();
+					dPacket.getPort(), bRequest).start();
 		}
 
 		dSocket.close();
@@ -152,32 +155,29 @@ public class DNSProxy extends Thread {
 	public class ClientThread extends Thread {
 		private int				_intPort;
 		private byte[]			_bRequest;
-		private String			_strLog;
-		private boolean			_varDoCache;
 		private InetAddress 	_inaSender;
 		private DatagramSocket	_dsPointer;
 
 		public ClientThread(DatagramSocket socket, InetAddress address, 
-			int port, byte[] request) {
-			_strLog = "";
-			_intPort = port;
-			_varDoCache = false;
-			_bRequest = request;
-			_inaSender = address;
+				int port, byte[] request) {
 			_dsPointer = socket;
+			_inaSender = address;
+			_intPort = port;
+			_bRequest = request;
 		}
 
 		public void run() {
-			byte[] bResponse;
-			byte[] bBuffer;
 
 			DNSResponse dnsResponse = new DNSResponse(_bRequest);
-			String strDomain = dnsResponse.getDomain();
+			String hostname = dnsResponse.getDomain();
 
-			bBuffer = getAddress(strDomain);
-
-			bResponse = dnsResponse.getResponse(bBuffer);
-	          DatagramPacket dPacket = new DatagramPacket(bResponse, 
+			byte[] responseIPAdress = getAddress(hostname,  _inaSender);
+			
+			if (responseIPAdress == null)
+				return;
+				
+			byte[] bResponse = dnsResponse.getResponse(responseIPAdress);
+			DatagramPacket dPacket = new DatagramPacket(bResponse, 
 				bResponse.length, _inaSender, _intPort);
 
 			try {
@@ -185,64 +185,87 @@ public class DNSProxy extends Thread {
 			}
 			catch (Exception e) {
 				printDebug(e);
+				return;
 			}
 
-			_dnsLog.println(_strLog + String.format(" %40s %16s", strDomain, 
-				_inaSender.getHostAddress()));
-
-			if (_varCache && _varDoCache) {
-				_dnsCache.cache(strDomain, bBuffer);
+			if (_varCache ) {
+				_dnsCache.cache(hostname, responseIPAdress);
 			}
 		}
 
+		// experimental, not in use
+		// forwards the original UDP datagramm to the real nameserver
+		// and the response datagramm to the original requester
+		private void run_passThrough() {
+			DNSResponse dnsResponse = new DNSResponse(_bRequest);
+			String strDomain = dnsResponse.getDomain();
+
+			printDebug("Got request for: "+strDomain);
+
+			try {
+				byte[] bResponse = DNSQuery_passThrough.doLookup(_bRequest);
+				DatagramPacket dPacket = new DatagramPacket(bResponse, 
+						bResponse.length, _inaSender, _intPort);
+				_dsPointer.send(dPacket);
+			}
+			catch (Exception e) {
+				printDebug(e);
+			}
+		}
+
+
+		byte[] toByteArray(String str) {
+			byte[] ret = new byte[4];
+			int nr = 0;
+			for (String part: str.split("\\.")) {
+				ret[nr] = (byte) Integer.parseInt(part);
+				nr++;
+			}
+			return ret;
+		}
+		
 		/*
-		 * FIXME: Performance
-		 * Optimize this code!  It's slowing down responses.
 		 */
-		private byte[] getAddress(String domain) {
-			if (isBlocked(domain)) {
-				_strLog = "-B-";
+		private byte[] getAddress(String hostname, InetAddress requester) {
+
+			//String from = " from " + requester.getHostAddress(); // should not be logged
+			String msgChunk = "Got request for: "+hostname;
+
+			if (isBlocked(hostname)) {
+				printDebug(msgChunk + "   BLOCKED");
 				return _bBlockedIP;
 			}
 
-			DNSEntry dnsEntry = null;
-		
-			if (_varCache)
-				dnsEntry = _dnsCache.isCached(domain);
+			if (_varCache) {
+				DNSEntry dnsEntry = _dnsCache.isCached(hostname, _intCacheTime);
+				if (dnsEntry != null) {
+					printDebug(msgChunk + "   CACHED");
+					return dnsEntry.getAddress();
+				}
+			}
 
-			//Is there no entry in the cache?
-			if (dnsEntry == null) {
-				try {
-					byte[] bBuffer = DNSQuery.doLookup(domain);
-					_strLog = "-L-";
-					_varDoCache = true;
-					return bBuffer;
+			try {
+				byte[] responseIPAdress = null;
+				if (nameserver != null) {
+					// contact the given nameserver with dnsjava library
+					String ipString = DNSQuery_dnsjava.doLookup(nameserver, hostname);
+					if (ipString == null) return null;
+					printDebug(msgChunk + "   -> " + ipString);
+					responseIPAdress = toByteArray(ipString);
 				}
-				catch (Exception e) {
-					_strLog = "-U-";
-					_varDoCache = true;
-					return _bUnknownIP;
+				else {
+					// contact the platform DNS service
+					responseIPAdress = DNSQuery.doLookup(hostname);
+					printDebug(msgChunk + "   -> " + responseIPAdress);
 				}
+				
+				return responseIPAdress;
+			} catch (Exception e1) {
+				//e1.printStackTrace();
+				printDebug(msgChunk + "   ERROR");
+				return null;
 			}
-			//Is the record in the cache expired?
-			else if ((new Date().getTime() - _intCacheTime) > dnsEntry.getDate()) {
-				try {
-					byte[] bBuffer = DNSQuery.doLookup(domain);
-					_strLog = "-E-";
-					dnsEntry.setAddress(bBuffer);
-					return bBuffer;
-				}
-				catch (Exception e) {
-					_strLog = "-U-";
-					_varDoCache = true;
-					return _bUnknownIP;
-				}
-			}
-			//It's a good cached record, return it.
-			else {
-				_strLog = "-C-";
-				return dnsEntry.getAddress();
-			}
+
 		}
 
 		private boolean isBlocked(String domain) {
@@ -264,33 +287,31 @@ public class DNSProxy extends Thread {
 			}
 		}
 
-		private boolean isPresent(String domain, String[] array) {
-			domain = domain.trim().toLowerCase();
+	}
 
-			for (String strBuffer : array) {
-				if (domain.endsWith(strBuffer.trim().toLowerCase()))
-					return true;
-			}
+	private boolean isPresent(String domain, Set<String> array) {
+		domain = domain.trim().toLowerCase();
 
-			return false;
+		for (String strBuffer : array) {
+			if (domain.endsWith(strBuffer.trim().toLowerCase()))
+				return true;
 		}
+
+		return false;
 	}
 
 //INITIALIZATION----------------------------------------------------------------
 
 	private void loadSettings(String config) {
 		//Create default objects.
-		_strWhitelist = new String[0];
-		_strBlacklist = new String[0];
+		_strWhitelist = new HashSet<String>();
+		_strBlacklist = new HashSet<String>();
 
 		//Set default settings.
 		_fmFilter = FILTERMODE.Whitelist;
 		_bBlockedIP = new byte[] {(byte)192, (byte)168, 0, 2};
 		_bUnknownIP = new byte[] {(byte)192, (byte)168, 0, 2};
 		_intPort = 53;
-		_strWhitePath = "/etc/dnsproxyd/whitelist.dat";
-		_strBlackPath = "/etc/dnsproxyd/blacklist.dat";
-		_strCachePath = "/tmp/dnscache.tmp";
 		_intCacheTime = 604800000;
 		_strLogPath = "/var/log/dnsproxyd";
 		_varCache = true;
@@ -314,19 +335,31 @@ public class DNSProxy extends Thread {
 			fReader.close();
 		}
 		catch (Exception e) {
+			System.err.println("Could not read config file "+config);
+			System.err.println("Using build-in config.");
 		}
 
 		printDebug("Configuration loaded: ");
 		printDebug("FilterMode = " + _fmFilter);
-		printDebug("BlockedIP = " + _bBlockedIP.toString());
-		printDebug("UnknownIP = " + _bUnknownIP.toString());
+		printDebug("BlockedIP = " + getPrintableAddress(_bBlockedIP));
+		printDebug("UnknownIP = " + getPrintableAddress(_bUnknownIP));
 		printDebug("Listen = " + _intPort);
+		printDebug("nameserver = " + nameserver);
 		printDebug("Whitelist = " + _strWhitePath);
 		printDebug("Blacklist = " + _strBlackPath);
-		printDebug("CachePath = " + _strCachePath);
-		printDebug("CacheTime = " + _intCacheTime);
-		printDebug("LogPath = " + _strLogPath);
+		printDebug("CacheTime = " + _intCacheTime + " Minutes");
 		printDebug("Cache = " + _varCache + "\n");
+		//printDebug("LogPath = " + _strLogPath);
+		
+		_intCacheTime = _intCacheTime * 60 * 1000; // millisec
+	}
+	
+	private String getPrintableAddress(byte[] addr) {
+		try {
+			return InetAddress.getByAddress(addr).getHostAddress();
+		} catch (UnknownHostException e) {
+			return "Not a valid address";
+		}
 	}
 
 	private void parseSetting(String setting) throws Exception {
@@ -367,62 +400,37 @@ public class DNSProxy extends Thread {
 			_strWhitePath = strSplit[1];
 		else if (strSetting.equals("blacklist"))
 			_strBlackPath = strSplit[1];
-		else if (strSetting.equals("cachepath"))
-			_strCachePath = strSplit[1];
-		else if (strSetting.equals("cachetime"))
-			_intCacheTime = Integer.parseInt(strSplit[1]) * 24 * 60 * 60 * 1000;
+		else if (strSetting.equals("cachetime")) {
+			if (strSplit[1].startsWith("m"))
+			_intCacheTime = Integer.parseInt(strSplit[1].substring(1));  // in minutes
+			else
+			_intCacheTime = Integer.parseInt(strSplit[1]) * 24 * 60 ; // in days
+		}
 		else if (strSetting.equals("logpath"))
 			_strLogPath = strSplit[1];
 		else if (strSetting.equals("cache"))
 			_varCache = new Boolean(strSplit[1]);
+		else if (strSetting.equals("nameserver"))
+			nameserver = strSplit[1];
+		else if (strSetting.equals("debug"))
+			DEBUG = "true".equals(strSplit[1]);
 	}
 
-	private void loadWhitelist(String whitelist) {
-		if (whitelist == null)
-				return;
-
-		try {
-			printDebug("Loading 'whitelist' database...");
-
-			File fWhitelist = new File(whitelist);
-			if (!fWhitelist.canRead()) {
-				printDebug("The specified file does not exist, or you do " +
-					"not have permission to access it.");
-			}
-
-			String strBuffer = "";
-			Vector<String> vecBuffer = new Vector<String>();
-			FileReader frStream = new FileReader(fWhitelist);
-			BufferedReader brStream = new BufferedReader(frStream);
-
-			while ((strBuffer = brStream.readLine()) != null) {
-				vecBuffer.addElement(strBuffer);
-           	} 
-
-			brStream.close();
-			frStream.close();
-
-			_strWhitelist = new String[vecBuffer.size()];
-			for (int i = 0; i < _strWhitelist.length; i++) {
-				_strWhitelist[i] = vecBuffer.get(i);
-			}
-				
-			printDebug(_strWhitelist.length + " domains added to " +
-				"whitelist.\n");
-		}
-		catch (Exception e) {
-			_strWhitelist = new String[0];
-			printDebug("Error: " + e.getMessage() + "\n");
-		}
-	}
-
-	private void loadBlacklist(String blacklist) {
+	private Set<String> loadBlackOrWhitelist(String blacklist, String listname) {
 		if (blacklist == null)
-				return;
-
+				return null;
+		if (blacklist.trim().length() == 0)
+			return null;
+			
+		printDebug("Loading '"+listname+"' database...");
+		
+		Set<String> result = new HashSet<String>();
+		
 		try {
-			printDebug("Loading 'blacklist' database...");
-
+			if (! blacklist.startsWith("/") &&! blacklist.startsWith("\\") 
+					&&  ! blacklist.substring(1,2).equals(":")) {
+				blacklist = CONFDIR + "/" + blacklist;
+			};
 			File fWhitelist = new File(blacklist);
 			if (!fWhitelist.canRead()) {
 				printDebug("The specified file does not exist, or you do " +
@@ -441,54 +449,82 @@ public class DNSProxy extends Thread {
 			brStream.close();
 			frStream.close();
 
-			_strBlacklist = new String[vecBuffer.size()];
-			for (int i = 0; i < _strBlacklist.length; i++) {
-				_strBlacklist[i] = vecBuffer.get(i);
+			for (int i = 0; i < vecBuffer.size(); i++) {
+				String entry = vecBuffer.get(i).trim();
+				if (entry.length() < 1) continue;
+				String entryStripped = null;
+				if (entry.startsWith("#")) {  // comment line
+					continue;
+				}
+				if (entry.startsWith("=")) {  // use this entry without trimming of the beginning parts
+					entryStripped = entry.substring(1).trim();
+				}
+				else { // trim of the beginning parts but two, so abc.def.xyz.com will become xyz.com
+					int idx = entry.lastIndexOf(".");
+					if (idx > -1)
+						idx = entry.lastIndexOf(".", idx-1);
+					if (idx > -1)
+						entryStripped = entry.substring(idx +1);
+					else
+						entryStripped = entry;
+				}
+				printDebug(entry + "    ->    "+ entryStripped);
+				if (! isPresent(entryStripped, result))
+					result.add(entryStripped);
 			}
-				
-			printDebug(_strBlacklist.length + " domains added to " +
-				"blacklist.\n");
 		}
 		catch (Exception e) {
-			_strBlacklist = new String[0];
 			printDebug("Error: " + e.getMessage() + "\n");
 		}
+		
+		printDebug(result.size() + " domains added to " + listname+".\n");
+		return result;
 	}
 
 //LOGGING-----------------------------------------------------------------------
 
 	private static void printBanner() {
-		printDebug("\n==============================================");
+		printDebug("==============================================");
 		printDebug("DNS Proxy                         Version " + VERSION);
 		printDebug("==============================================");
 		printDebug("");
 	}
 
-	public static void printDebug(String e) {
-		if (DEBUG)
-			System.out.println(e);
+	public static void printDebug(String s) {
+		String out = df.format(new Date()) + " - " + s;
+		if (DEBUG) {
+			System.out.println(out);
+		}
+		//_dnsLog.println(out); checks for file rolling on each write, that is a bit much overhead
 	}
 
 	public static void printDebug(Exception e) {
-		if (DEBUG)
-			System.out.println(e.getMessage());
+			printDebug(e.getMessage());
 	}
 
 //ENTRY-------------------------------------------------------------------------
 	
 	public static void main(String[] args) {
-		/*
-		 * TODO: Debug
-		 * Add debugging from command line argument.
-		 */
-		DNSProxy dnspThread;
-		String strConfig = CONFDIR + "/dnsproxy.conf";
-		
-		if (args.length != 0) {
-			strConfig = args[0].trim();
+		int eaten = 0;
+		while (args.length > eaten) {
+			if ((args.length >= 2) && "--configDir".equals(args[eaten])) {
+				CONFDIR = args[eaten+1]; // will also be used for relative blacklist/whitelist files
+				eaten += 2;
+			}
+			
+			else if ((args.length >= 1) && "--disabled".equals(args[eaten])) {
+				DISABLED = true;
+				eaten += 1;
+			}
+			else {
+				eaten += 1; // ignore this arg
+			}
+			
 		}
 		
-		dnspThread = new DNSProxy(strConfig);
+		
+		DNSProxy dnspThread;
+		dnspThread = new DNSProxy(CONFDIR + "/dnsproxy.conf");
 		dnspThread.start();
 
 		try {

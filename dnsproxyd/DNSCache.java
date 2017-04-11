@@ -1,7 +1,7 @@
 /*
  * dnsproxyd
  * Version 1.0
- * Copyright © 2008 Michael Landi
+ * Copyright ï¿½ 2008 Michael Landi
  *
  * This file is part of dnsproxyd.
  *
@@ -20,83 +20,54 @@
  */
 
 
-import java.io.*;
-import java.util.*;
+import java.util.HashMap;
+import java.util.Map;
 
 public class DNSCache {
 	/*
 	 * Global variables.
 	 */
-	private String					_strCache;
-	private Vector<DNSEntry>		_vecCache; //Vector which stores each dns entry.
+	private Map<String, DNSEntry>		_vecCache;
 
 	/*
 	 * Default constructor, accepts no arguments.
 	 */
-	public DNSCache(String cachepath) {
-		_strCache = cachepath;
-		/*
-		 * TODO: Convert Vector to array?
-		 * Create a 5000 entry cache, or by file size.
-		 */
-		_vecCache = new Vector<DNSEntry>();
-
-		loadCache();
-		DNSProxy.printDebug(_vecCache.size() + " cached records loaded.");
+	public DNSCache() {
+		_vecCache = new HashMap<String, DNSEntry>();
 	}
 
-	public DNSEntry isCached(String strDomain) {
+	public DNSEntry isCached(String strDomain, int _intCacheTime) {
 		strDomain = strDomain.trim().toLowerCase();
 
-		for (DNSEntry dnsEntry : _vecCache) {
-			if (strDomain.equals(dnsEntry.getDomain()))
-				return dnsEntry;
+		DNSEntry dnsEntry = _vecCache.get(strDomain); 
+		if (dnsEntry == null) {
+			return null;
 		}
-
-		return null;
+		if ((System.currentTimeMillis() - _intCacheTime) > dnsEntry.getDate()) {
+			_vecCache.remove(strDomain);
+			return null;
+		}
+		return dnsEntry;
 	}
 
 	public void cache(String domain, byte[] address) {
 		domain = domain.trim().toLowerCase();
 
-		_vecCache.addElement(new DNSEntry(domain, address));
+		if (! _vecCache.containsKey(domain))
+			_vecCache.put(domain, new DNSEntry(domain, address));
 	}
 
 	public int prune(long time) {
 		int intCount = 0;
 
-		for (int i = 0; i < _vecCache.size(); i++) {
-			if ((new Date().getTime() - time) > _vecCache.get(i).getDate()) {
-				_vecCache.remove(i);
+		for (String hostname: _vecCache.keySet()) {
+			if ((System.currentTimeMillis() - time) > _vecCache.get(hostname).getDate()) {
+				_vecCache.remove(hostname);
 				intCount++;
 			}
 		}
 
 		return intCount;
-	}
-
-	public void writeCache() {
-		try {
-			OutputStream os = new FileOutputStream(_strCache);
-			ObjectOutput oo = new ObjectOutputStream(os);
-			oo.writeObject(_vecCache);
-			oo.close();
-		}
-		catch (Exception e) {
-			DNSProxy.printDebug(e);
-		}
-	}
-
-	public void loadCache() {
-		try {
-			InputStream is = new FileInputStream(_strCache);
-			ObjectInput oi = new ObjectInputStream(is);
-			_vecCache = (Vector)oi.readObject();
-			oi.close();
-		}
-		catch (Exception e) {
-			DNSProxy.printDebug(e);
-		}
 	}
 
 	public int size() {

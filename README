@@ -2,3 +2,29 @@ dnsproxyd
 DNS Proxy Server
 
 DNS Proxy Server is an ultra fast DNS Proxy written in Java. It is a service which forwards DNS packets between a client and a server. It supports whitelisting and blacklisting DNS host names to block or allow domain names based on rule sets. The service can also cache DNS entries for fast responses on slow connections. This implementation is for Red Hat Linux but it can be easily adopted to any JRE supported environment.
+
+If you want to install this nameserver proxy to be used by all programms, you 
+will enter your computers IP address in your /etc/resolf.conf, like  this:
+   nameserver 192.168.0.2
+(Note that there is NO equal sign!)
+Then all DNS requests will go to your computer, port 53 (which is the default port for DNS).
+As this proxy must be able to listen on port 53, it must run with root privileges.
+
+Still, this proxy has to know, where to forward the DNS requests to. This must be given in the dnsproxy.conf:
+   nameserver=192.168.0.1
+(Note that there IS an equal sign!)
+Here you will enter the IP address, what was previously in the /etc/resolf.conf file. 
+However, you can only name ONE nameserver here. The real nameserver will be contacted 
+via the dnsjava library, so the dnsjava.jar archive (http://www.xbill.org/dnsjava/) is 
+a mandatory dependency now. I have added it in the lib folder for convenience, but 
+feel free to compile it again by yourself.
+
+You may also copy the files under conf/ to /etc/dnsproxyd/ directory, 
+or use "--configDir /some/dir/some/where" as command line args.
+
+If the need arises to quickly stop the proxy from filtering, you can exit the program,
+and start it again with the option "--disabled", e.g.:
+   ./start.sh --disabled 
+This way you can quickly manage situations, where the blacklist is to restrictive 
+for your current task.
+
